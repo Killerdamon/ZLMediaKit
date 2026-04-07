@@ -448,10 +448,16 @@ if(ENABLE_AI_INFERENCE)
   message(STATUS "Trying to enable CUDA and TensorRT for AI Inference...")
   enable_language(CUDA)
   
-  # 寻找 TensorRT
-  find_path(TENSORRT_INCLUDE_DIR NvInfer.h)
-  find_library(TENSORRT_LIBRARY nvinfer)
-  find_library(TENSORRT_PARSER_LIBRARY nvparsers)
+  if(MSVC)
+    # 在 Windows 下，优先从用户指定的 TensorRT_ROOT 寻找
+    find_path(TENSORRT_INCLUDE_DIR NvInfer.h HINTS ${TensorRT_ROOT}/include)
+    find_library(TENSORRT_LIBRARY nvinfer HINTS ${TensorRT_ROOT}/lib)
+    find_library(TENSORRT_PARSER_LIBRARY nvparsers HINTS ${TensorRT_ROOT}/lib)
+  else()
+    find_path(TENSORRT_INCLUDE_DIR NvInfer.h)
+    find_library(TENSORRT_LIBRARY nvinfer)
+    find_library(TENSORRT_PARSER_LIBRARY nvparsers)
+  endif()
   
   if(TENSORRT_INCLUDE_DIR AND TENSORRT_LIBRARY)
     message(STATUS "Found TensorRT: ${TENSORRT_LIBRARY}")

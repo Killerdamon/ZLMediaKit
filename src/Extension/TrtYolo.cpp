@@ -10,6 +10,7 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include "Util/logger.h"
 
 using namespace nvinfer1;
 
@@ -19,9 +20,21 @@ namespace ai {
 class Logger : public ILogger {
 public:
     void log(Severity severity, const char* msg) noexcept override {
-        // Suppress info-level messages
-        if (severity <= Severity::kWARNING)
-            std::cout << "[TensorRT] " << msg << std::endl;
+        // 将 TensorRT 日志重定向到 ZLMediaKit 的日志系统，解决 Windows 无控制台程序报错问题
+        switch (severity) {
+            case Severity::kINTERNAL_ERROR:
+            case Severity::kERROR:
+                toolkit::ErrorL << "[TensorRT] " << msg;
+                break;
+            case Severity::kWARNING:
+                toolkit::WarnL << "[TensorRT] " << msg;
+                break;
+            case Severity::kINFO:
+                // toolkit::InfoL << "[TensorRT] " << msg; // 抑制过多的 Info 打印
+                break;
+            default:
+                break;
+        }
     }
 } gLogger;
 

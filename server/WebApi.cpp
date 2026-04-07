@@ -71,6 +71,10 @@
 #include "VideoStack.h"
 #endif
 
+#ifdef ENABLE_AI_INFERENCE
+#include "Extension/AIPluginInjector.h"
+#endif
+
 #include "Onvif/Onvif.h"
 #include "Onvif/SoapUtil.h"
 
@@ -1311,6 +1315,45 @@ void installWebApi() {
                            });
         });
     });
+
+#ifdef ENABLE_AI_INFERENCE
+    // 动态添加带有 AI 硬件加速的拉流代理
+    // 测试url http://127.0.0.1/index/api/addAIStreamProxy?vhost=__defaultVhost__&app=proxy&stream=ai_test&url=rtsp://127.0.0.1/live/obs&model_path=yolov8n.engine
+    api_regist("/index/api/addAIStreamProxy",[](API_ARGS_MAP_ASYNC){
+        CHECK_SECRET();
+        CHECK_ARGS("vhost","app","stream","url","model_path");
+
+        std::string vhost = DEFAULT_VHOST;
+        if (!allArgs["vhost"].empty()) {
+            vhost = allArgs["vhost"];
+        }
+        
+        EventPollerPool::Instance().getPoller(false)->async([=]() mutable {
+            try {
+                auto proxy = AIPluginInjector::createAIProxy(
+                    vhost, 
+                    allArgs["app"], 
+                    allArgs["stream"], 
+                    allArgs["url"], 
+                    allArgs["model_path"]
+                );
+                
+                // 将这个特殊的 AI proxy 也加入管理列表以便后续可以通过 api 删除
+                auto tuple = MediaTuple { vhost, allArgs["app"], allArgs["stream"], "" };
+                s_player_proxy.add(tuple.shortUrl(), proxy);
+                
+                val["code"] = API::Success;
+                val["data"]["key"] = tuple.shortUrl();
+                val["data"]["ai_stream"] = allArgs["stream"] + "_ai"; // AI 插件会自动在流名后加上 _ai
+                invoker(200, headerOut, val.toStyledString());
+            } catch (std::exception &ex) {
+                val["code"] = API::Exception;
+                val["msg"] = ex.what();
+                invoker(200, headerOut, val.toStyledString());
+            }
+        });
+    });
+#endif
 
     // 关闭拉流代理  [AUTO-TRANSLATED:5204f128]
     // Close the pull stream proxy
