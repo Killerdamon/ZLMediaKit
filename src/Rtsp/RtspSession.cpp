@@ -437,7 +437,7 @@ void RtspSession::onAuthSuccess() {
         strong_self->_play_src = rtsp_src;
         for(auto &track : strong_self->_sdp_track){
             track->_ssrc = rtsp_src->getSsrc(track->_type);
-            track->_seq = rtsp_src->getSeqence(track->_type);
+            track->_seq = rtsp_src->getSequence(track->_type);
             track->_time_stamp = rtsp_src->getTimeStamp(track->_type);
         }
 
@@ -832,7 +832,7 @@ void RtspSession::handleReq_Play(const Parser &parser) {
         }
         inited_tracks.emplace_back(track->_type);
         track->_ssrc = play_src->getSsrc(track->_type);
-        track->_seq = play_src->getSeqence(track->_type);
+        track->_seq = play_src->getSequence(track->_type);
         track->_time_stamp = play_src->getTimeStamp(track->_type);
 
         rtp_info << "url=" << track->getControlUrl(_content_base) << ";"
@@ -1175,9 +1175,7 @@ int RtspSession::getTrackIndexByInterleaved(int interleaved) {
 }
 
 bool RtspSession::close(MediaSource &sender) {
-    //此回调在其他线程触发
-    string err = StrPrinter << "close media: " << sender.getUrl();
-    safeShutdown(SockException(Err_shutdown,err));
+    shutdown(SockException(Err_shutdown,"close media: " + sender.getUrl()));
     return true;
 }
 

@@ -50,6 +50,10 @@ target_compile_definitions(MediaServer
 target_compile_options(MediaServer
   PRIVATE ${COMPILE_OPTIONS_DEFAULT})
 
+if(MINGW)
+  update_cached_list(MK_LINK_LIBRARIES dbghelp)
+endif()
+
 if(CMAKE_SYSTEM_NAME MATCHES "Linux")
   target_link_libraries(MediaServer -Wl,--start-group ${MK_LINK_LIBRARIES} -Wl,--end-group)
 else()
@@ -69,7 +73,7 @@ install(TARGETS MediaServer DESTINATION ${INSTALL_PATH_RUNTIME})
 
 #relase 类型时额外输出debug调试信息
 string(TOLOWER ${CMAKE_BUILD_TYPE} CMAKE_BUILD_TYPE_LOWER)
-if(UNIX)
+if(UNIX AND ENABLE_OBJCOPY)
   if("${CMAKE_BUILD_TYPE_LOWER}" STREQUAL "release")
     find_program(OBJCOPY_FOUND objcopy)
     if (OBJCOPY_FOUND)
