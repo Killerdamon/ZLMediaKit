@@ -6,6 +6,10 @@
 #include "Util/logger.h"
 #include "Extension/H264.h"
 
+// 引入 CUDA 和 TensorRT 工具类
+#include "cuda_utils.h"
+#include "TrtYolo.h"
+
 // 硬件加速相关，假设编译环境包含 CUDA 和 cuvid
 extern "C" {
 #include <libavutil/hwcontext_cuda.h>
@@ -19,7 +23,7 @@ AIFilter::AIFilter(const std::string& stream_id, const std::string& model_path)
     : _stream_id(stream_id), _model_path(model_path) {
     InfoL << "AIFilter Created: Stream " << _stream_id << ", Model " << _model_path;
     
-    // 初始化 TensorRT (此处为框架骨架)
+    // 初始化 TensorRT 引擎
     initTensorRT(_model_path);
 }
 
@@ -128,15 +132,12 @@ void AIFilter::initEncoder() {
 }
 
 void AIFilter::initTensorRT(const std::string& model_path) {
-    // 3. 使用 TensorRT C++ API 加载 yolov8.engine
-    // 伪代码：
-    /*
-    IRuntime* runtime = createInferRuntime(gLogger);
-    std::ifstream file(model_path, std::ios::binary);
-    ...
-    _engine = runtime->deserializeCudaEngine(modelData, modelSize);
-    _context = _engine->createExecutionContext();
-    */
+    // 3. 实例化 TensorRT 引擎
+    // _trt = std::make_shared<ai::TrtYolo>();
+    // _trt->init(model_path, 640, 640);
+    // cudaMalloc((void**)&_d_input_tensor, 1 * 3 * 640 * 640 * sizeof(float));
+    // cudaStreamCreate(&_stream);
+    
     InfoL << "Initialized TensorRT Engine with " << model_path;
 }
 
@@ -146,22 +147,38 @@ void AIFilter::aiProcessLoop() {
         // 从 _frame_queue 中获取 NVDEC 解码出来的 NV12 显存帧
         // AVFrame* hw_frame = _frame_queue.pop();
         // if (!hw_frame) continue;
-
-        // 4. CUDA 预处理 (NV12 -> RGB -> Resize -> NCHW Float32)
-        // 这一步使用 CUDA 核函数(Kernel)直接在 GPU 完成，不经过 CPU
-        // cudaPreprocess(hw_frame->data, input_tensor_ptr);
-
-        // 5. 执行 TensorRT 推理 (异步)
-        // _context->enqueueV2(bindings, stream, nullptr);
-        // cudaStreamSynchronize(stream);
         
-        // 6. 解析 YOLO 结果，如果发现目标(人/车)，用 CUDA Kernel 画框
-        // 也可以回传极小的一块内存回 CPU 进行 OpenCV 画框，再送回 GPU
-        // if (person_detected) {
-        //     cudaDrawBox(hw_frame->data, bbox_x, bbox_y, w, h, color);
+        // --- 以下是串联推理与画框的核心代码 (零拷贝流水线) ---
+        
+        // 1. 获取 FFmpeg 硬件解码出来的 NV12 显存指针
+        // uint8_t* d_y = hw_frame->data[0];
+        // uint8_t* d_uv = hw_frame->data[1];
+        // int src_w = hw_frame->width;
+        // int src_h = hw_frame->height;
+        // int src_pitch = hw_frame->linesize[0];
+
+        // 2. CUDA 前处理 (NV12 -> NCHW RGB Float32)
+        // ai::nv12_to_nchw_rgb_letterbox(
+        //     d_y, d_uv, src_w, src_h, src_pitch, 
+        //     _d_input_tensor, 640, 640, _stream
+        // );
+
+        // 3. TensorRT 异步推理
+        // _trt->inferAsync(_d_input_tensor, _stream);
+
+        // 4. 同步获取检测结果
+        // float scale = std::min(640.0f / src_w, 640.0f / src_h);
+        // int pad_x = (640 - src_w * scale) / 2;
+        // int pad_y = (640 - src_h * scale) / 2;
+        // auto boxes = _trt->postProcessSync(_stream, scale, pad_x, pad_y);
+
+        // 5. 如果检测到了目标，直接在显存中画框
+        // if (!boxes.empty()) {
+        //     ai::draw_bboxes_nv12(d_y, d_uv, src_w, src_h, src_pitch, boxes, _stream);
+        //     cudaStreamSynchronize(_stream); // 确保画完再送编码
         // }
 
-        // 7. 送入硬件编码器 (NVENC)
+        // 6. 送入硬件编码器 (NVENC)
         // avcodec_send_frame(_encoder_ctx, hw_frame);
         /*
         AVPacket *pkt = av_packet_alloc();

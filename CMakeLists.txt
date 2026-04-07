@@ -439,6 +439,31 @@ endif()
 # 查找 openssl 是否安装
 # find openssl installed
 find_package(OpenSSL QUIET)
+
+# ----------------------------------------------------------------------------
+# 查找 CUDA 和 TensorRT 依赖 (AI 插件必需)
+# ----------------------------------------------------------------------------
+option(ENABLE_AI_INFERENCE "Enable C++ TensorRT AI Inference Plugin" ON)
+if(ENABLE_AI_INFERENCE)
+  message(STATUS "Trying to enable CUDA and TensorRT for AI Inference...")
+  enable_language(CUDA)
+  
+  # 寻找 TensorRT
+  find_path(TENSORRT_INCLUDE_DIR NvInfer.h)
+  find_library(TENSORRT_LIBRARY nvinfer)
+  find_library(TENSORRT_PARSER_LIBRARY nvparsers)
+  
+  if(TENSORRT_INCLUDE_DIR AND TENSORRT_LIBRARY)
+    message(STATUS "Found TensorRT: ${TENSORRT_LIBRARY}")
+    include_directories(SYSTEM ${TENSORRT_INCLUDE_DIR})
+    update_cached_list(MK_LINK_LIBRARIES ${TENSORRT_LIBRARY} ${TENSORRT_PARSER_LIBRARY} cudart)
+    update_cached_list(MK_COMPILE_DEFINITIONS ENABLE_AI_INFERENCE)
+  else()
+    message(WARNING "TensorRT not found. AI Inference Plugin will be disabled.")
+    set(ENABLE_AI_INFERENCE OFF)
+  endif()
+endif()
+# ----------------------------------------------------------------------------
 if(OPENSSL_FOUND AND ENABLE_OPENSSL)
   message(STATUS "found library: ${OPENSSL_LIBRARIES}, ENABLE_OPENSSL defined")
   include_directories(${OPENSSL_INCLUDE_DIR})
