@@ -5,6 +5,7 @@ import paho.mqtt.client as mqtt
 import json
 import base64
 import os
+import numpy as np
 from ultralytics import YOLO
 
 # ----------------------------------------------------------------------
@@ -50,6 +51,19 @@ def publish_alarm(mqtt_client, camera_id, class_name, confidence, image_base64):
     mqtt_client.publish(MQTT_TOPIC_ALARM, json.dumps(payload))
     print(f"[ALARM] Published alarm for {class_name} (conf: {confidence:.2f}) on camera {camera_id}")
 
+def point_in_polygon(point, polygon):
+    """
+    使用 OpenCV 判断点是否在多边形内
+    """
+    if not polygon:
+        return True # 如果没有定义多边形，则认为所有点都在区域内
+    
+    # cv2.pointPolygonTest 返回值:
+    # > 0: 点在多边形内
+    # = 0: 点在多边形边缘上
+    # < 0: 点在多边形外
+    return cv2.pointPolygonTest(np.array(polygon, dtype=np.int32), point, False) >= 0
+
 def run_ai_service(args):
     # 1. 初始化 MQTT 客户端
     mqtt_client = mqtt.Client(client_id=f"ai_service_{args.camera_id}")
@@ -64,6 +78,10 @@ def run_ai_service(args):
     # 2. 加载 YOLO 模型 (这里以 YOLOv8n 为例，支持 ONNX / TensorRT 导出模型加速)
     # 你可以替换为 yolov8n.engine (TensorRT) 或 yolov8n.onnx (ONNXRuntime) 以获得极致性能
     print(f"[AI] Loading YOLO model: {args.model}")
+    # 强制启用跟踪器参数如果传入
+    if args.track:
+        print("[AI] Target Tracking is enabled (using default tracker).")
+        
     model = YOLO(args.model)
 
     # 3. 初始化视频流读取 (从 ZLMediaKit 拉流)
@@ -80,6 +98,19 @@ def run_ai_service(args):
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     if fps == 0: fps = 25 # 默认兜底
     print(f"[Stream] Video Info: {width}x{height} @ {fps}fps")
+
+    # 解析多边形布防区域
+    polygon_points = []
+    if args.polygon:
+        try:
+            # 格式例如: "100,100;500,100;500,500;100,500"
+            points_str = args.polygon.split(';')
+            for p in points_str:
+                x, y = map(int, p.split(','))
+                polygon_points.append((x, y))
+            print(f"[AI] Polygon region defined: {polygon_points}")
+        except Exception as e:
+            print(f"[Error] Failed to parse polygon points: {e}")
 
     # 4. (可选) 配置 FFmpeg 推流管道 (推流回 ZLMediaKit)
     out_pipe = None
@@ -124,14 +155,16 @@ def run_ai_service(args):
                 cap = cv2.VideoCapture(args.input_url)
                 continue
             
-            # --- 抽帧处理 (可选，降低CPU/GPU负载) ---
-            # 如果 fps 很高，可以每 N 帧推理一次
-            # if frame_count % 2 != 0:
-            #     pass 
+            # --- 绘制多边形布防区域 ---
+            if polygon_points:
+                cv2.polylines(frame, [np.array(polygon_points, dtype=np.int32)], isClosed=True, color=(255, 0, 0), thickness=2)
 
-            # --- YOLO 推理 ---
+            # --- YOLO 推理 (包含跟踪功能如果启用) ---
             # stream=True 适合视频流，半精度半张量
-            results = model.predict(source=frame, conf=args.conf, iou=args.iou, verbose=False, device=args.device)
+            if args.track:
+                results = model.track(source=frame, persist=True, conf=args.conf, iou=args.iou, verbose=False, device=args.device)
+            else:
+                results = model.predict(source=frame, conf=args.conf, iou=args.iou, verbose=False, device=args.device)
             
             person_detected = False
             highest_conf = 0.0
@@ -148,13 +181,30 @@ def run_ai_service(args):
                     # 置信度
                     conf = float(box.conf[0])
                     
-                    # 绘制边界框
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    label = f"{class_name} {conf:.2f}"
-                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    # 计算目标中心点
+                    center_x = (x1 + x2) // 2
+                    center_y = (y1 + y2) // 2
                     
-                    # 业务逻辑：检测到人 (class_id 0 通常是 person)
-                    if cls_id == 0 or class_name == 'person':
+                    # 多边形布防检测
+                    in_zone = point_in_polygon((center_x, center_y), polygon_points)
+                    
+                    # 如果启用了跟踪，获取 Track ID
+                    track_id = ""
+                    if args.track and box.id is not None:
+                        track_id = f" ID:{int(box.id[0])}"
+                    
+                    # 根据是否在区域内决定颜色 (绿色代表安全/未触发，红色代表报警/在区域内)
+                    color = (0, 0, 255) if (in_zone and polygon_points) else (0, 255, 0)
+                    
+                    # 绘制边界框和中心点
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    cv2.circle(frame, (center_x, center_y), 4, color, -1)
+                    
+                    label = f"{class_name}{track_id} {conf:.2f}"
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    
+                    # 业务逻辑：检测到人且在布防区域内
+                    if (cls_id == 0 or class_name == 'person') and in_zone:
                         person_detected = True
                         if conf > highest_conf:
                             highest_conf = conf
@@ -167,7 +217,7 @@ def run_ai_service(args):
                 img_base64 = base64.b64encode(buffer).decode('utf-8')
                 
                 # 推送 MQTT
-                publish_alarm(mqtt_client, args.camera_id, "person", highest_conf, img_base64)
+                publish_alarm(mqtt_client, args.camera_id, "person_in_zone", highest_conf, img_base64)
                 last_alarm_time = current_time
 
             # --- 帧率统计 (OSD 绘制) ---
@@ -211,6 +261,10 @@ if __name__ == "__main__":
     parser.add_argument("--conf", type=float, default=0.5, help="Confidence threshold")
     parser.add_argument("--iou", type=float, default=0.45, help="NMS IOU threshold")
     parser.add_argument("--device", type=str, default="", help="Device to run on (e.g., 'cpu', '0' for CUDA GPU)")
+    
+    # 新增高级功能参数
+    parser.add_argument("--track", action="store_true", help="Enable object tracking (ByteTrack/DeepSORT)")
+    parser.add_argument("--polygon", type=str, default="", help="Define a polygon zone, format: 'x1,y1;x2,y2;x3,y3...'")
     
     args = parser.parse_args()
     run_ai_service(args)
